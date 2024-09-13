@@ -1,3 +1,3 @@
 fn main() {
-    ios_test::run("127.0.0.1".to_owned(), 8080);
+    ios_test::run("127.0.0.1:8080".to_owned());
 }

@@ -6,11 +6,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use quinn::{crypto::rustls::QuicClientConfig, ClientConfig, TransportConfig, VarInt};
+use quinn::{crypto::rustls::QuicClientConfig, ClientConfig, TransportConfig};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 
 #[uniffi::export]
-pub fn run(ip: String, port: u16) {
+pub fn run(url: String) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -20,7 +20,7 @@ pub fn run(ip: String, port: u16) {
         let addr = SocketAddr::from(([0, 0, 0, 0], 0));
         let endpoint = quinn::Endpoint::client(addr).unwrap();
 
-        let addr = format!("{}:{}", ip, port).parse().unwrap();
+        let addr = tokio::net::lookup_host(url).await.unwrap().next().unwrap();
         let connection = endpoint
             .connect_with(configure_client(), addr, "speedtest")
             .unwrap()
