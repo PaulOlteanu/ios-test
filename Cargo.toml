@@ -1,0 +1,22 @@
+[package]
+name = "ios-test"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[dependencies]
+quinn = "0.11.5"
+rcgen = "0.13.0" # TODO: Do we need this?
+rustls = { version = "0.23.12", default-features = false, features = [
+  "ring",
+  "logging",
+  "std",
+  "tls12",
+] }
+tokio = { version = "1.40.0", features = ["full"] }
+uniffi = "0.28.1"
+
+[build-dependencies]
+uniffi = { version = "0.28", features = ["build"] }
