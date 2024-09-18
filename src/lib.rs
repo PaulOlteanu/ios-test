@@ -19,11 +19,15 @@ pub fn run(url: String, bandwidth: f64, duration: u64, buffer_size: u64) {
         let socket = UdpSocket::bind(addr).await.unwrap();
 
         let server_addr = tokio::net::lookup_host(url).await.unwrap().next().unwrap();
+        println!("sending to {}", server_addr);
+
+        socket.connect(server_addr).await.unwrap();
 
         let bytes_per_sec = (bandwidth / 8.0) * (1024.0 * 1024.0);
         let sends_per_sec = bytes_per_sec / buffer_size as f64;
 
         println!("starting speed test");
+
         let start = Instant::now();
 
         let mut interval =
@@ -31,13 +35,17 @@ pub fn run(url: String, bandwidth: f64, duration: u64, buffer_size: u64) {
 
         while start.elapsed() <= Duration::from_secs(duration) {
             interval.tick().await;
-            let data = vec![0; buffer_size as usize];
 
-            socket.send_to(&data, &server_addr).await.unwrap();
+            let data = vec![0; buffer_size as usize];
+            // println!("sending {:?}", data);
+
+            socket.writable().await.unwrap();
+            let n = socket.send(&data).await.unwrap();
+            println!("sent {}", n);
         }
 
         let data = [1; 32];
-        socket.send_to(&data, server_addr).await.unwrap();
+        socket.send(&data).await.unwrap();
 
         println!("finished speed test");
     });

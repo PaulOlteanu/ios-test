@@ -11,12 +11,12 @@ struct Data {
 async fn main() {
     let addr = SocketAddr::from(([0, 0, 0, 0], 8000));
     let socket = UdpSocket::bind(addr).await.unwrap();
-    let mut buf = [0; 16384];
+    let mut buf = vec![0; 16384];
 
     let mut in_progress: HashMap<SocketAddr, Data> = HashMap::new();
 
     loop {
-        let (n, addr) = socket.recv_from(&mut buf).await.unwrap();
+        let (n, addr) = socket.recv_buf_from(&mut buf).await.unwrap();
         if n == 0 {
             continue;
         }
