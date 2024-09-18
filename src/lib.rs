@@ -68,7 +68,7 @@ pub fn configure_client() -> ClientConfig {
     let mut transport_config = TransportConfig::default();
     transport_config.max_idle_timeout(None); // TODO: IS THIS SUS?
     transport_config.enable_segmentation_offload(true);
-    transport_config.initial_mtu(16384);
+    transport_config.initial_mtu(4096);
     client_config.transport_config(Arc::new(transport_config));
 
     client_config
