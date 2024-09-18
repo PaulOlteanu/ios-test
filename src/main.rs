@@ -5,7 +5,7 @@ use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 
 #[tokio::main]
 async fn main() {
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
+    let addr = SocketAddr::from(([0, 0, 0, 0], 8000));
     let (config, _) = configure_server();
 
     let endpoint = Endpoint::server(config, addr).unwrap();
