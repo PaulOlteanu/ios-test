@@ -43,7 +43,10 @@ pub fn run(url: String, bandwidth: f64, duration: u64, buffer_size: u64) {
         }
 
         let data = vec![1; buffer_size as usize];
-        socket.send(&data).await.unwrap();
+        let n = socket.send(&data).await.unwrap();
+        let n = socket.send(&data).await.unwrap();
+        let n = socket.send(&data).await.unwrap();
+        println!("sent {} ones", n);
         drop(socket);
         tokio::time::sleep(Duration::from_secs(2)).await;
 
