@@ -14,20 +14,30 @@ async fn main() {
         while let Some(incoming) = endpoint.accept().await {
             tokio::spawn(async move {
                 let connection = incoming.accept().unwrap().await.unwrap();
-                println!("got connection");
+                println!("got connection {}", connection.remote_address());
 
                 let (send_stream, mut recv_stream) = connection.accept_bi().await.unwrap();
 
                 let start = Instant::now();
                 let mut total_sent = 0;
                 let mut buf = vec![9; 4096];
+
                 while let Ok(Some(n)) = recv_stream.read(&mut buf).await {
-                    println!("received data chunk len={}", n);
+                    // println!("received data chunk len={}", n);
                     total_sent += n;
                 }
 
                 println!("connection finished");
-                println!("{} bytes sent in {:?}", total_sent, start.elapsed());
+                let duration = start.elapsed();
+                let throughput =
+                    (((total_sent * 8) / (1024 * 1024)) as f64) / duration.as_secs_f64();
+                println!(
+                    "received {} bytes over {:?} from {}. throughput = {} mbps",
+                    total_sent,
+                    duration,
+                    connection.remote_address(),
+                    throughput
+                );
             });
         }
     }

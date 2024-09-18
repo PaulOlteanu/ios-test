@@ -10,7 +10,7 @@ use quinn::{crypto::rustls::QuicClientConfig, ClientConfig, TransportConfig};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 
 #[uniffi::export]
-pub fn run(url: String, bandwidth: f64, duration: u64) {
+pub fn run(url: String, bandwidth: f64, duration: u64, buffer_size: u64) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -29,10 +29,11 @@ pub fn run(url: String, bandwidth: f64, duration: u64) {
 
         let (mut send_stream, _recv_stream) = connection.open_bi().await.unwrap();
 
-        let bytes_per_sec = (1024 * 1024) as f64 * bandwidth / 8.0;
-        let sends_per_sec = bytes_per_sec / 2048.0;
+        let bytes_per_sec = (bandwidth / 8.0) * (1024.0 * 1024.0);
+        let sends_per_sec = bytes_per_sec / buffer_size as f64;
 
         println!("starting speed test");
+
         let start = Instant::now();
 
         let mut interval =
@@ -40,7 +41,8 @@ pub fn run(url: String, bandwidth: f64, duration: u64) {
 
         while start.elapsed() <= Duration::from_secs(duration) {
             interval.tick().await;
-            let data = vec![0; 2048];
+
+            let data = vec![0; buffer_size as usize];
             send_stream.write_all(&data).await.unwrap();
         }
 
