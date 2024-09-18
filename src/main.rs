@@ -20,7 +20,7 @@ async fn main() {
 
                 let start = Instant::now();
                 let mut total_sent = 0;
-                let mut buf = vec![9; 4096];
+                let mut buf = vec![9; 16384];
 
                 while let Ok(Some(n)) = recv_stream.read(&mut buf).await {
                     // println!("received data chunk len={}", n);
@@ -53,6 +53,8 @@ pub(crate) fn configure_server() -> (ServerConfig, CertificateDer<'static>) {
         ServerConfig::with_single_cert(vec![cert_der.clone()], priv_key.into()).unwrap();
     let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
     transport_config.max_concurrent_uni_streams(0_u8.into());
+    transport_config.initial_mtu(16384);
+    transport_config.enable_segmentation_offload(true);
     transport_config.max_idle_timeout(None); // TODO: IS THIS SUS?
 
     (server_config, cert_der)
