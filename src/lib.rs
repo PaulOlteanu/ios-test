@@ -17,13 +17,11 @@ pub fn run(url: String, bandwidth: f64, duration: u64, buffer_size: u64) {
         .unwrap();
 
     rt.block_on(async move {
+        println!("connecting");
         let addr = SocketAddr::from(([0, 0, 0, 0], 0));
         let endpoint = quinn::Endpoint::client(addr).unwrap();
 
-        println!("here1");
-
         let addr = tokio::net::lookup_host(url).await.unwrap().next().unwrap();
-        println!("here1.5");
 
         let connection = endpoint
             .connect_with(configure_client(), addr, "speedtest")
@@ -31,11 +29,7 @@ pub fn run(url: String, bandwidth: f64, duration: u64, buffer_size: u64) {
             .await
             .unwrap();
 
-        println!("here2");
-
         let (mut send_stream, _recv_stream) = connection.open_bi().await.unwrap();
-
-        println!("here3");
 
         let bytes_per_sec = (bandwidth / 8.0) * (1024.0 * 1024.0);
         let sends_per_sec = bytes_per_sec / buffer_size as f64;
