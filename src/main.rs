@@ -19,8 +19,6 @@ fn main() {
             continue;
         }
 
-        println!("received {} bytes from {}", n, addr);
-
         if buf[0] == 1 {
             if let Some(data) = in_progress.remove(&addr) {
                 let amount = data.amount + n;
@@ -42,7 +40,5 @@ fn main() {
             }
         });
         entry.amount += n;
-
-        // println!("received {} bytes from {}", x, y);
     }
 }
