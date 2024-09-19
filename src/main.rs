@@ -1,44 +1,86 @@
-use std::net::{SocketAddr, UdpSocket};
-use std::{collections::HashMap, time::Instant};
+use std::io;
+use std::time::Duration;
+use std::time::Instant;
 
-struct Data {
-    start: Instant,
-    amount: usize,
-}
+use futures::{AsyncReadExt, StreamExt};
+use libp2p::identity::Keypair;
+use libp2p::{Stream, StreamProtocol};
 
-fn main() {
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8000));
-    let socket = UdpSocket::bind(addr).unwrap();
-    let mut buf = vec![0; 16384];
+const ECHO_PROTOCOL: StreamProtocol = StreamProtocol::new("/echo");
 
-    let mut in_progress: HashMap<SocketAddr, Data> = HashMap::new();
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::fmt().init();
+
+    let mut bytes = std::fs::read("private.pk8").unwrap();
+    let keypair = Keypair::rsa_from_pkcs8(&mut bytes).unwrap();
+
+    let mut swarm = libp2p::SwarmBuilder::with_existing_identity(keypair)
+        .with_tokio()
+        .with_tcp(
+            libp2p::tcp::Config::default(),
+            libp2p::noise::Config::new,
+            libp2p::yamux::Config::default,
+        )
+        .unwrap()
+        .with_behaviour(|_| libp2p_stream::Behaviour::default())
+        .unwrap()
+        .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(u64::MAX)))
+        .build();
+
+    swarm
+        .listen_on("/ip4/0.0.0.0/tcp/8000".parse().unwrap())
+        .unwrap();
+
+    let mut incoming_streams = swarm
+        .behaviour()
+        .new_control()
+        .accept(ECHO_PROTOCOL)
+        .unwrap();
+
+    tokio::spawn(async move {
+        while let Some((peer, stream)) = incoming_streams.next().await {
+            tokio::spawn(async move {
+                recv(stream).await.unwrap();
+            });
+        }
+    });
 
     loop {
-        let (n, addr) = socket.recv_from(&mut buf).unwrap();
-        if n == 0 {
-            continue;
+        let event = swarm.next().await.expect("never terminates");
+
+        match event {
+            libp2p::swarm::SwarmEvent::NewListenAddr { address, .. } => {
+                let listen_address = address.with_p2p(*swarm.local_peer_id()).unwrap();
+                tracing::info!(%listen_address);
+            }
+
+            event => tracing::info!(?event, "got event"),
+        }
+    }
+}
+
+async fn recv(mut stream: Stream) -> io::Result<usize> {
+    let start = Instant::now();
+
+    let mut total = 0;
+
+    let mut buf = [0u8; 16384];
+
+    loop {
+        let read = stream.read(&mut buf).await?;
+        if read == 0 {
+            let elapsed = start.elapsed();
+
+            let throughput = (((total * 8) / (1024 * 1024)) as f64) / elapsed.as_secs_f64();
+            println!(
+                "received {} bytes over {:?}. throughput = {} mbps",
+                total, elapsed, throughput
+            );
+
+            return Ok(total);
         }
 
-        if buf[0] == 1 {
-            if let Some(data) = in_progress.remove(&addr) {
-                let amount = data.amount + n;
-                let duration = data.start.elapsed();
-                let throughput = (((amount * 8) / (1024 * 1024)) as f64) / duration.as_secs_f64();
-                println!(
-                    "received {} bytes over {:?} from {}. throughput = {} mbps",
-                    amount, duration, addr, throughput
-                );
-            }
-            continue;
-        }
-
-        let entry = in_progress.entry(addr).or_insert_with(|| {
-            println!("adding new client {}", addr);
-            Data {
-                start: Instant::now(),
-                amount: 0,
-            }
-        });
-        entry.amount += n;
+        total += read;
     }
 }
