@@ -12,7 +12,6 @@ use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
 use tokio::net::{TcpSocket, UdpSocket};
 use tokio::sync::mpsc;
-use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::Level;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -196,24 +195,4 @@ async fn candidate_handler(
         candidates: state.candidates.clone(),
     };
     Json(candidates)
-}
-
-use std::net::IpAddr;
-use systemstat::{Platform, System};
-
-pub fn select_host_address() -> IpAddr {
-    let system = System::new();
-    let networks = system.networks().unwrap();
-
-    for net in networks.values() {
-        for n in &net.addrs {
-            if let systemstat::IpAddr::V4(v) = n.addr {
-                if !v.is_loopback() && !v.is_link_local() && !v.is_broadcast() {
-                    return IpAddr::V4(v);
-                }
-            }
-        }
-    }
-
-    panic!("Found no usable network interface");
 }
