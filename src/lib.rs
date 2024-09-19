@@ -82,8 +82,10 @@ pub fn run(host: String, port: u16, bandwidth: f64, duration: u64, buffer_size: 
         let mut change = rtc.sdp_api();
         let channel_config = ChannelConfig {
             label: "jklfds".to_owned(),
-            ordered: false,
-            reliability: Reliability::MaxRetransmits { retransmits: 0 },
+            // ordered: false,
+            ordered: true,
+            // reliability: Reliability::MaxRetransmits { retransmits: 0 },
+            reliability: Reliability::Reliable,
             negotiated: None,
             protocol: "jklfds".to_owned(),
         };
@@ -130,10 +132,12 @@ pub fn run(host: String, port: u16, bandwidth: f64, duration: u64, buffer_size: 
         let mut interval =
             tokio::time::interval(Duration::try_from_secs_f64(1.0 / sends_per_sec).unwrap());
 
-        let end = tokio::time::sleep(Duration::from_secs(duration));
-        tokio::pin!(end);
+        let mut end = Instant::now() + Duration::from_secs(duration);
+        let very_end = end + Duration::from_secs(duration + 30);
 
+        let mut should_send = false;
         let mut done = false;
+        let mut num_sent = 0;
 
         loop {
             let timeout = match rtc.poll_output().unwrap() {
@@ -169,6 +173,7 @@ pub fn run(host: String, port: u16, bandwidth: f64, duration: u64, buffer_size: 
 
                         Event::ChannelOpen(id, name) => {
                             *data_channel_id.lock().unwrap() = Some(id);
+                            should_send = true;
                             println!("data channel opened {:?} {name}", id);
                         }
 
@@ -187,7 +192,7 @@ pub fn run(host: String, port: u16, bandwidth: f64, duration: u64, buffer_size: 
             };
 
             if done {
-                break;
+                end = Instant::now() + Duration::from_secs(1000);
             }
 
             let mut buf1 = vec![0; 2048];
@@ -230,22 +235,30 @@ pub fn run(host: String, port: u16, bandwidth: f64, duration: u64, buffer_size: 
 
                 _ = interval.tick() => {
                     if let Some(id) = *data_channel_id.lock().unwrap() {
-                        let data = vec![0; buffer_size as usize];
-                        rtc.channel(id).unwrap().write(false, &data).unwrap();
+                        if should_send {
+                            let data = vec![0; buffer_size as usize];
+                            rtc.channel(id).unwrap().write(false, &data).unwrap();
+                            num_sent += 1;
+                        }
                     }
 
                     continue;
                 }
 
-                _ = &mut end => {
-                    let data = vec![1; buffer_size as usize];
+                _ = tokio::time::sleep_until(end.into()) => {
                     if let Some(id) = *data_channel_id.lock().unwrap() {
+                        let data = vec![1; buffer_size as usize];
                         rtc.channel(id).unwrap().write(false, &data).unwrap();
                     }
 
-                    println!("finished speed test");
+                    println!("finished speed test. sent {} messages", num_sent);
                     done = true;
+                    should_send = false;
                     continue;
+                }
+
+                _ = tokio::time::sleep_until(very_end.into()) => {
+                    break;
                 }
 
                 _ = tokio::time::sleep_until(timeout.into()) => {
