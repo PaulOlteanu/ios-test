@@ -5,6 +5,8 @@ use std::time::Instant;
 
 use futures::{AsyncReadExt, AsyncWriteExt, StreamExt};
 use libp2p::dcutr;
+use libp2p::dns::ResolverConfig;
+use libp2p::dns::ResolverOpts;
 use libp2p::identify;
 use libp2p::multiaddr::Protocol;
 use libp2p::noise;
@@ -45,8 +47,7 @@ pub fn run(url: String, relay_address: String, bandwidth: f64, duration: u64, bu
             )
             .expect("with_tcp")
             .with_quic()
-            .with_dns()
-            .expect("with_dns")
+            .with_dns_config(ResolverConfig::cloudflare(), ResolverOpts::default())
             .with_relay_client(noise::Config::new, yamux::Config::default)
             .expect("with_realay_client")
             .with_behaviour(|keypair, relay_behaviour| Behaviour {
