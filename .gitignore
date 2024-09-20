@@ -4,3 +4,5 @@ android/
 generated/
 IosTest/
 .DS_Store
+*.pem
+*.pk8

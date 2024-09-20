@@ -202,7 +202,14 @@ async fn connection_handler(
         stream.write_all(&bytes).await.unwrap();
     }
 
+    let bytes = vec![1; buffer_size];
+    stream.write_all(&bytes).await.unwrap();
+
+    stream.flush().await.unwrap();
+
     stream.close().await.unwrap();
+
+    tokio::time::sleep(Duration::from_secs(5)).await;
 
     println!("speed test done");
 }
