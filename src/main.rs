@@ -31,12 +31,12 @@ type WrappedState = Arc<Mutex<AppState>>;
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let socket = UdpSocket::bind("0.0.0.0:8000").await.unwrap();
+    let socket = UdpSocket::bind("0.0.0.0:8080").await.unwrap();
 
     let mut rtc = Rtc::new();
 
     // let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
-    let addr = SocketAddr::from(([129, 146, 216, 83], 8000));
+    let addr = SocketAddr::from(([129, 146, 216, 83], 8080));
     let candidate = Candidate::host(addr, "udp").unwrap();
 
     rtc.add_local_candidate(candidate.clone());
@@ -60,7 +60,7 @@ async fn main() {
         )
         .with_state(state.clone());
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
     println!("listening on {}", listener.local_addr().unwrap());
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
