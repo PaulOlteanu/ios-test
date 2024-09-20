@@ -20,7 +20,9 @@ struct Candidates {
 
 struct AppState {
     rtc: Rtc,
+    candidate: Candidate,
     ready_send: mpsc::UnboundedSender<()>,
+    new_candidate_send: mpsc::UnboundedSender<()>,
 }
 
 type WrappedState = Arc<Mutex<AppState>>;
@@ -34,19 +36,28 @@ async fn main() {
     let mut rtc = Rtc::new();
 
     // let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
-    let addr = SocketAddr::from(([129, 146, 216, 83], 8080));
+    let addr = SocketAddr::from(([129, 146, 216, 83], 8000));
     let candidate = Candidate::host(addr, "udp").unwrap();
 
     rtc.add_local_candidate(candidate.clone());
 
     let (ready_send, mut ready_recv) = mpsc::unbounded_channel();
+    let (new_candidate_send, mut new_candidate_recv) = mpsc::unbounded_channel();
 
-    let state = AppState { rtc, ready_send };
+    let state = AppState {
+        rtc,
+        ready_send,
+        new_candidate_send,
+        candidate,
+    };
     let state = Arc::new(Mutex::new(state));
 
     let app = Router::new()
         .route("/offer", post(offer_handler))
-        .route("/candidate", post(candidate_handler))
+        .route(
+            "/candidate",
+            get(get_candidate_handler).post(candidate_handler),
+        )
         .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
@@ -148,6 +159,10 @@ async fn main() {
                 )
             }
 
+            _ = new_candidate_recv.recv() => {
+                continue;
+            }
+
             _ = tokio::time::sleep_until(timeout.into()) => {
                 Input::Timeout(Instant::now())
             }
@@ -161,14 +176,21 @@ async fn main() {
 
 #[debug_handler]
 async fn offer_handler(State(state): State<WrappedState>, body: String) -> impl IntoResponse {
-    let offer = SdpOffer::from_sdp_string(&body).unwrap();
-
     let mut state = state.lock().await;
+
+    let offer = SdpOffer::from_sdp_string(&body).unwrap();
     let answer = state.rtc.sdp_api().accept_offer(offer).unwrap();
+
+    answer.to_sdp_string()
+}
+
+#[debug_handler]
+async fn get_candidate_handler(State(state): State<WrappedState>) -> impl IntoResponse {
+    let state = state.lock().await;
 
     state.ready_send.send(()).unwrap();
 
-    answer.to_sdp_string()
+    state.candidate.to_sdp_string()
 }
 
 #[debug_handler]
@@ -177,4 +199,5 @@ async fn candidate_handler(State(state): State<WrappedState>, body: String) -> i
     let candidate = Candidate::from_sdp_string(&body).unwrap();
 
     state.rtc.add_remote_candidate(candidate);
+    state.new_candidate_send.send(()).unwrap();
 }
