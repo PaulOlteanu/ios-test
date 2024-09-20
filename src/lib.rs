@@ -43,12 +43,12 @@ pub fn run(url: String, relay_address: String, bandwidth: f64, duration: u64, bu
                 libp2p::noise::Config::new,
                 libp2p::yamux::Config::default,
             )
-            .unwrap()
+            .expect("with_tcp")
             .with_quic()
             .with_dns()
-            .unwrap()
+            .expect("with_dns")
             .with_relay_client(noise::Config::new, yamux::Config::default)
-            .unwrap()
+            .expect("with_realay_client")
             .with_behaviour(|keypair, relay_behaviour| Behaviour {
                 relay_client: relay_behaviour,
                 identify: identify::Behaviour::new(identify::Config::new(
@@ -58,17 +58,17 @@ pub fn run(url: String, relay_address: String, bandwidth: f64, duration: u64, bu
                 dcutr: dcutr::Behaviour::new(keypair.public().to_peer_id()),
                 stream: stream::Behaviour::new(),
             })
-            .unwrap()
+            .expect("with_behaviour")
             .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(10)))
             .build();
 
         swarm
             .listen_on("/ip4/0.0.0.0/udp/0/quic-v1".parse().unwrap())
-            .unwrap();
+            .expect("listen_on");
 
         swarm
             .listen_on("/ip4/0.0.0.0/tcp/0".parse().unwrap())
-            .unwrap();
+            .expect("listen_on");
 
         // Wait to listen on all interfaces.
         (async {
@@ -78,7 +78,7 @@ pub fn run(url: String, relay_address: String, bandwidth: f64, duration: u64, bu
             loop {
                 tokio::select! {
                     event = swarm.next() => {
-                        match event.unwrap() {
+                        match event.expect("event") {
                             SwarmEvent::NewListenAddr { address, .. } => {
                                 tracing::info!(%address, "Listening on address");
                             }
@@ -94,8 +94,8 @@ pub fn run(url: String, relay_address: String, bandwidth: f64, duration: u64, bu
         })
         .await;
 
-        let relay_address: Multiaddr = relay_address.parse().unwrap();
-        swarm.dial(relay_address.clone()).unwrap();
+        let relay_address: Multiaddr = relay_address.parse().expect("parse");
+        swarm.dial(relay_address.clone()).expect("dial");
 
         (async {
             let mut learned_observed_addr = false;
