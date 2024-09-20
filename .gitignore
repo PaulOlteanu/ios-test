@@ -1,3 +1,5 @@
 /target
 *.zip
 android/
+*.pem
+*.pk8
