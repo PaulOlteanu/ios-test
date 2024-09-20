@@ -19,9 +19,7 @@ struct Candidates {
 }
 
 struct AppState {
-    rtc: Rtc,
-    candidate: Candidate,
-    ready_send: mpsc::UnboundedSender<()>,
+    offer_send: mpsc::UnboundedSender<()>,
     new_candidate_send: mpsc::UnboundedSender<()>,
 }
 
@@ -31,147 +29,28 @@ type WrappedState = Arc<Mutex<AppState>>;
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let socket = UdpSocket::bind("0.0.0.0:8080").await.unwrap();
+    let mut m = MediaEngine::default();
+    m.register_default_codecs()?;
+    let mut registry = Registry::new();
 
-    let mut rtc = Rtc::new();
+    // Use the default set of Interceptors
+    registry = register_default_interceptors(registry, &mut m)?;
 
-    // let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
-    let addr = SocketAddr::from(([129, 146, 216, 83], 8080));
-    let candidate = Candidate::host(addr, "udp").unwrap();
+    let api = APIBuilder::new()
+        .with_media_engine(m)
+        .with_interceptor_registry(registry)
+        .build();
 
-    rtc.add_local_candidate(candidate.clone());
-
-    let (ready_send, mut ready_recv) = mpsc::unbounded_channel();
-    let (new_candidate_send, mut new_candidate_recv) = mpsc::unbounded_channel();
-
-    let state = AppState {
-        rtc,
-        ready_send,
-        new_candidate_send,
-        candidate,
+    // Prepare the configuration
+    let config = RTCConfiguration {
+        ice_servers: vec![RTCIceServer {
+            urls: vec!["stun:stun.l.google.com:19302".to_owned()],
+            ..Default::default()
+        }],
+        ..Default::default()
     };
-    let state = Arc::new(Mutex::new(state));
 
-    let app = Router::new()
-        .route("/offer", post(offer_handler))
-        .route(
-            "/candidate",
-            get(get_candidate_handler).post(candidate_handler),
-        )
-        .with_state(state.clone());
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
-    println!("listening on {}", listener.local_addr().unwrap());
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-
-    ready_recv.recv().await.unwrap();
-
-    let mut received = 0;
-    let mut start = None;
-
-    loop {
-        let timeout = {
-            let mut state = state.lock().await;
-
-            match state.rtc.poll_output().unwrap() {
-                // Stop polling when we get the timeout.
-                Output::Timeout(v) => v,
-
-                // Transmit this data to the remote peer. Typically via
-                // a UDP socket. The destination IP comes from the ICE
-                // agent. It might change during the session.
-                Output::Transmit(v) => {
-                    socket.send_to(&v.contents, v.destination).await.unwrap();
-                    continue;
-                }
-
-                // Events are mainly incoming media data from the remote
-                // peer, but also data channel data and statistics.
-                Output::Event(v) => {
-                    // Abort if we disconnect.
-                    if v == Event::IceConnectionStateChange(IceConnectionState::Disconnected) {
-                        return;
-                    }
-
-                    match v {
-                        Event::Connected => {
-                            println!("connected");
-                        }
-
-                        Event::IceConnectionStateChange(state) => {
-                            println!("Ice connection state change {:?}", state);
-                        }
-
-                        Event::ChannelOpen(id, name) => {
-                            println!("data channel opened {:?} {name}", id);
-                        }
-
-                        Event::ChannelData(data) => {
-                            if start.is_none() {
-                                start = Some(Instant::now());
-                            }
-
-                            received += data.data.len();
-
-                            if data.data.first() == Some(&1) {
-                                let elapsed = start.unwrap().elapsed();
-
-                                let throughput = (((received * 8) / (1024 * 1024)) as f64)
-                                    / elapsed.as_secs_f64();
-                                println!(
-                                    "received {} bytes over {:?}. throughput = {} mbps",
-                                    received, elapsed, throughput
-                                );
-                                break;
-                            }
-                        }
-
-                        Event::ChannelClose(id) => {
-                            println!("data channel closed {:?}", id);
-                        }
-                        _ => {}
-                    }
-
-                    continue;
-                }
-            }
-        };
-
-        let mut buf = vec![0; 4096];
-
-        let input = tokio::select! {
-            input = socket.recv_from(&mut buf) => {
-                let (n, source) = input.unwrap();
-                buf.truncate(n);
-
-                let destination = addr;
-
-                Input::Receive(
-                    Instant::now(),
-                    Receive {
-                        proto: Protocol::Udp,
-                        source,
-                        destination,
-                        contents: buf.as_slice().try_into().unwrap(),
-                    }
-                )
-            }
-
-            _ = new_candidate_recv.recv() => {
-                continue;
-            }
-
-            _ = tokio::time::sleep_until(timeout.into()) => {
-                Input::Timeout(Instant::now())
-            }
-        };
-
-        let mut state = state.lock().await;
-        // Input is either a Timeout or Receive of data. Both drive the state forward.
-        state.rtc.handle_input(input).unwrap();
-    }
+    let peer_connection = Arc::new(api.new_peer_connection(config).await?);
 }
 
 #[debug_handler]
