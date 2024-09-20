@@ -49,7 +49,7 @@ pub fn run(url: String, relay_address: String, bandwidth: f64, duration: u64, bu
             .with_quic()
             .with_dns_config(ResolverConfig::cloudflare(), ResolverOpts::default())
             .with_relay_client(noise::Config::new, yamux::Config::default)
-            .expect("with_realay_client")
+            .expect("with_relay_client")
             .with_behaviour(|keypair, relay_behaviour| Behaviour {
                 relay_client: relay_behaviour,
                 identify: identify::Behaviour::new(identify::Config::new(

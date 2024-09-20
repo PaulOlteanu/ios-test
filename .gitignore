@@ -1,3 +1,6 @@
 /target
 *.zip
 android/
+generated/
+IosTest/
+.DS_Store
