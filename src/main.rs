@@ -176,6 +176,7 @@ async fn main() {
 
 #[debug_handler]
 async fn offer_handler(State(state): State<WrappedState>, body: String) -> impl IntoResponse {
+    println!("received offer {}", body);
     let mut state = state.lock().await;
 
     let offer = SdpOffer::from_sdp_string(&body).unwrap();
@@ -186,6 +187,7 @@ async fn offer_handler(State(state): State<WrappedState>, body: String) -> impl 
 
 #[debug_handler]
 async fn get_candidate_handler(State(state): State<WrappedState>) -> impl IntoResponse {
+    println!("request to get candidate");
     let state = state.lock().await;
 
     state.ready_send.send(()).unwrap();
@@ -195,6 +197,7 @@ async fn get_candidate_handler(State(state): State<WrappedState>) -> impl IntoRe
 
 #[debug_handler]
 async fn candidate_handler(State(state): State<WrappedState>, body: String) -> impl IntoResponse {
+    println!("received candidate {}", body);
     let mut state = state.lock().await;
     let candidate = Candidate::from_sdp_string(&body).unwrap();
 
