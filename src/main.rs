@@ -11,7 +11,9 @@ use tokio::net::{TcpSocket, UdpSocket};
 use tokio::sync::{mpsc, Mutex};
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::MediaEngine;
+use webrtc::api::setting_engine::SettingEngine;
 use webrtc::api::APIBuilder;
+use webrtc::ice::network_type::NetworkType;
 use webrtc::ice_transport::ice_candidate::{RTCIceCandidate, RTCIceCandidateInit};
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
@@ -41,9 +43,13 @@ async fn main() {
     // Use the default set of Interceptors
     registry = register_default_interceptors(registry, &mut m).unwrap();
 
+    let mut settings = SettingEngine::default();
+    settings.set_network_types(vec![NetworkType::Udp4]);
+
     let api = APIBuilder::new()
         .with_media_engine(m)
         .with_interceptor_registry(registry)
+        .with_setting_engine(settings)
         .build();
 
     // Prepare the configuration
