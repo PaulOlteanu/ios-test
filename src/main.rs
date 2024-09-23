@@ -7,34 +7,38 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{debug_handler, Json, Router};
 use serde::{Deserialize, Serialize};
-use str0m::change::SdpOffer;
-use str0m::net::{Protocol, Receive};
-use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
 use tokio::net::{TcpSocket, UdpSocket};
 use tokio::sync::{mpsc, Mutex};
+use webrtc::api::interceptor_registry::register_default_interceptors;
+use webrtc::api::media_engine::MediaEngine;
+use webrtc::api::APIBuilder;
+use webrtc::ice_transport::ice_candidate::{RTCIceCandidate, RTCIceCandidateInit};
+use webrtc::ice_transport::ice_server::RTCIceServer;
+use webrtc::interceptor::registry::Registry;
+use webrtc::peer_connection::configuration::RTCConfiguration;
+use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+use webrtc::peer_connection::RTCPeerConnection;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Candidates {
     candidates: Vec<String>,
 }
 
+#[derive(Clone)]
 struct AppState {
-    offer_send: mpsc::UnboundedSender<()>,
-    new_candidate_send: mpsc::UnboundedSender<()>,
+    peer_connection: Arc<RTCPeerConnection>,
 }
-
-type WrappedState = Arc<Mutex<AppState>>;
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
 
     let mut m = MediaEngine::default();
-    m.register_default_codecs()?;
+    m.register_default_codecs().unwrap();
     let mut registry = Registry::new();
 
     // Use the default set of Interceptors
-    registry = register_default_interceptors(registry, &mut m)?;
+    registry = register_default_interceptors(registry, &mut m).unwrap();
 
     let api = APIBuilder::new()
         .with_media_engine(m)
@@ -50,36 +54,65 @@ async fn main() {
         ..Default::default()
     };
 
-    let peer_connection = Arc::new(api.new_peer_connection(config).await?);
+    let peer_connection = Arc::new(api.new_peer_connection(config).await.unwrap());
+
+    peer_connection.on_data_channel(Box::new(move |d| {
+        Box::pin(async move {
+            d.on_message(Box::new(move |_msg| {
+                println!("received message");
+
+                Box::pin(async {})
+            }))
+        })
+    }));
+
+    let state = AppState { peer_connection };
+
+    let app = Router::new()
+        .route("/offer", post(offer_handler))
+        .route("/candidate", post(candidate_handler))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
 }
 
 #[debug_handler]
-async fn offer_handler(State(state): State<WrappedState>, body: String) -> impl IntoResponse {
+async fn offer_handler(State(state): State<AppState>, body: String) -> impl IntoResponse {
     println!("received offer {}", body);
-    let mut state = state.lock().await;
+    let description = RTCSessionDescription::offer(body).unwrap();
+    state
+        .peer_connection
+        .set_remote_description(description)
+        .await
+        .unwrap();
 
-    let offer = SdpOffer::from_sdp_string(&body).unwrap();
-    let answer = state.rtc.sdp_api().accept_offer(offer).unwrap();
+    let answer = state.peer_connection.create_answer(None).await.unwrap();
+    state
+        .peer_connection
+        .set_local_description(answer)
+        .await
+        .unwrap();
 
-    answer.to_sdp_string()
+    let mut gather_complete = state.peer_connection.gathering_complete_promise().await;
+    gather_complete.recv().await.unwrap();
+
+    let local_desc = state.peer_connection.local_description().await.unwrap();
+    local_desc.sdp
 }
 
 #[debug_handler]
-async fn get_candidate_handler(State(state): State<WrappedState>) -> impl IntoResponse {
-    println!("request to get candidate");
-    let state = state.lock().await;
-
-    state.ready_send.send(()).unwrap();
-
-    state.candidate.to_sdp_string()
-}
-
-#[debug_handler]
-async fn candidate_handler(State(state): State<WrappedState>, body: String) -> impl IntoResponse {
+async fn candidate_handler(State(state): State<AppState>, body: String) -> impl IntoResponse {
     println!("received candidate {}", body);
-    let mut state = state.lock().await;
-    let candidate = Candidate::from_sdp_string(&body).unwrap();
+    let candidate = RTCIceCandidateInit {
+        candidate: body,
+        ..Default::default()
+    };
 
-    state.rtc.add_remote_candidate(candidate);
-    state.new_candidate_send.send(()).unwrap();
+    state
+        .peer_connection
+        .add_ice_candidate(candidate)
+        .await
+        .unwrap();
 }
