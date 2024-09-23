@@ -107,7 +107,7 @@ async fn offer_handler(State(state): State<AppState>, body: String) -> impl Into
         .unwrap();
 
     let mut gather_complete = state.peer_connection.gathering_complete_promise().await;
-    gather_complete.recv().await.unwrap();
+    let _ = gather_complete.recv().await;
 
     let local_desc = state.peer_connection.local_description().await.unwrap();
     local_desc.sdp
