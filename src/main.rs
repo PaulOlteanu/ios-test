@@ -12,6 +12,7 @@ use libp2p::identify;
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
 use libp2p::noise;
+use libp2p::ping;
 use libp2p::relay;
 use libp2p::swarm::NetworkBehaviour;
 use libp2p::swarm::SwarmEvent;
@@ -27,10 +28,10 @@ const ECHO_PROTOCOL: StreamProtocol = StreamProtocol::new("/echo");
 #[derive(NetworkBehaviour)]
 struct Behaviour {
     relay_client: relay::client::Behaviour,
-    autonat: autonat::v2::client::Behaviour,
     identify: identify::Behaviour,
     dcutr: dcutr::Behaviour,
     stream: libp2p_stream::Behaviour,
+    ping: ping::Behaviour,
 }
 
 #[tokio::main]
@@ -53,23 +54,20 @@ async fn main() {
         .expect("with_relay_client")
         .with_behaviour(|keypair, relay_behaviour| Behaviour {
             relay_client: relay_behaviour,
-            autonat: autonat::v2::client::Behaviour::new(
-                OsRng,
-                autonat::v2::client::Config::default(),
-            ),
             identify: identify::Behaviour::new(identify::Config::new(
                 "/TODO/0.0.1".to_string(),
                 keypair.public(),
             )),
             dcutr: dcutr::Behaviour::new(keypair.public().to_peer_id()),
             stream: stream::Behaviour::new(),
+            ping: ping::Behaviour::new(ping::Config::new()),
         })
         .expect("with_behaviour")
-        .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(10)))
+        .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(20)))
         .build();
 
     swarm
-        .listen_on("/ip4/0.0.0.0/tcp/8000".parse().unwrap())
+        .listen_on("/ip4/0.0.0.0/tcp/0".parse().unwrap())
         .unwrap();
 
     // Wait to listen on all interfaces.
