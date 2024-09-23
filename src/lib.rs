@@ -2,7 +2,6 @@ uniffi::setup_scaffolding!();
 
 use std::io;
 use std::time::Duration;
-use std::time::Instant;
 
 use futures::{AsyncReadExt, AsyncWriteExt, StreamExt};
 use libp2p::autonat;
@@ -12,6 +11,7 @@ use libp2p::dns::ResolverOpts;
 use libp2p::identify;
 use libp2p::multiaddr::Protocol;
 use libp2p::noise;
+use libp2p::ping;
 use libp2p::relay;
 use libp2p::swarm::NetworkBehaviour;
 use libp2p::swarm::SwarmEvent;
@@ -19,7 +19,6 @@ use libp2p::yamux;
 use libp2p::{Multiaddr, PeerId, Stream, StreamProtocol};
 
 use libp2p_stream as stream;
-use rand::rngs::OsRng;
 use rand::RngCore;
 
 const ECHO_PROTOCOL: StreamProtocol = StreamProtocol::new("/echo");
@@ -27,10 +26,10 @@ const ECHO_PROTOCOL: StreamProtocol = StreamProtocol::new("/echo");
 #[derive(NetworkBehaviour)]
 struct Behaviour {
     relay_client: relay::client::Behaviour,
-    autonat: autonat::v2::client::Behaviour,
     identify: identify::Behaviour,
     dcutr: dcutr::Behaviour,
     stream: libp2p_stream::Behaviour,
+    ping: ping::Behaviour,
 }
 
 #[uniffi::export]
@@ -56,19 +55,16 @@ pub fn run(url: String, relay_address: String, bandwidth: f64, duration: u64, bu
             .expect("with_relay_client")
             .with_behaviour(|keypair, relay_behaviour| Behaviour {
                 relay_client: relay_behaviour,
-                autonat: autonat::v2::client::Behaviour::new(
-                    OsRng,
-                    autonat::v2::client::Config::default(),
-                ),
                 identify: identify::Behaviour::new(identify::Config::new(
-                    "/switchboard/0.0.1".to_string(),
+                    "/TODO/0.0.1".to_string(),
                     keypair.public(),
                 )),
                 dcutr: dcutr::Behaviour::new(keypair.public().to_peer_id()),
                 stream: stream::Behaviour::new(),
+                ping: ping::Behaviour::new(ping::Config::new()),
             })
             .expect("with_behaviour")
-            .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(10)))
+            .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(30)))
             .build();
 
         swarm
@@ -145,8 +141,6 @@ pub fn run(url: String, relay_address: String, bandwidth: f64, duration: u64, bu
             )
             .unwrap();
 
-        // swarm.dial(remote).unwrap();
-
         let control = swarm.behaviour().stream.new_control();
 
         tokio::spawn(async move { connection_handler(peer_id, control).await });
@@ -171,13 +165,13 @@ async fn connection_handler(peer: PeerId, mut control: stream::Control) {
         let stream = match control.open_stream(peer, ECHO_PROTOCOL).await {
             Ok(stream) => stream,
             Err(error @ stream::OpenStreamError::UnsupportedProtocol(_)) => {
-                tracing::info!(%peer, %error);
+                tracing::info!(%peer, %error, "failed to create stream");
                 return;
             }
             Err(error) => {
                 // Other errors may be temporary.
                 // In production, something like an exponential backoff / circuit-breaker may be more appropriate.
-                tracing::debug!(%peer, %error);
+                tracing::debug!(%peer, %error, "failed to create stream");
                 continue;
             }
         };
@@ -192,7 +186,7 @@ async fn connection_handler(peer: PeerId, mut control: stream::Control) {
 }
 
 async fn send(mut stream: Stream) -> io::Result<()> {
-    let num_bytes = rand::random::<usize>() % 1000;
+    let num_bytes = 1024;
 
     let mut bytes = vec![0; num_bytes];
     rand::thread_rng().fill_bytes(&mut bytes);
