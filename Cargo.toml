@@ -8,6 +8,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
 futures = "0.3.30"
+rand = "0.8"
 libp2p = { version = "0.54.1", features = [
   "noise",
   "ping",
@@ -21,6 +22,7 @@ libp2p = { version = "0.54.1", features = [
   "dcutr",
   "identify",
   "macros",
+  "autonat",
 ] }
 libp2p-stream = "0.2.0-alpha"
 tokio = { version = "1.40.0", features = ["full"] }
