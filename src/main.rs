@@ -10,6 +10,7 @@ use libp2p::dns::ResolverConfig;
 use libp2p::dns::ResolverOpts;
 use libp2p::identify;
 use libp2p::identity::Keypair;
+use libp2p::multiaddr::Protocol;
 use libp2p::noise;
 use libp2p::relay;
 use libp2p::swarm::NetworkBehaviour;
@@ -57,7 +58,7 @@ async fn main() {
                 autonat::v2::client::Config::default(),
             ),
             identify: identify::Behaviour::new(identify::Config::new(
-                "/switchboard/0.0.1".to_string(),
+                "/TODO/0.0.1".to_string(),
                 keypair.public(),
             )),
             dcutr: dcutr::Behaviour::new(keypair.public().to_peer_id()),
@@ -128,6 +129,10 @@ async fn main() {
             break;
         }
     }
+
+    swarm
+        .listen_on(relay_address.with(Protocol::P2pCircuit))
+        .unwrap();
 
     let mut incoming_streams = swarm
         .behaviour()

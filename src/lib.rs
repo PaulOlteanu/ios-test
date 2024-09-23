@@ -137,7 +137,15 @@ pub fn run(url: String, relay_address: String, bandwidth: f64, duration: u64, bu
             panic!("no peerid in addr");
         };
 
-        swarm.dial(remote).unwrap();
+        swarm
+            .dial(
+                relay_address
+                    .with(Protocol::P2pCircuit)
+                    .with(Protocol::P2p(peer_id)),
+            )
+            .unwrap();
+
+        // swarm.dial(remote).unwrap();
 
         let control = swarm.behaviour().stream.new_control();
 
