@@ -27,6 +27,7 @@ struct Candidates {
 #[derive(Clone)]
 struct AppState {
     peer_connection: Arc<RTCPeerConnection>,
+    queued_candidates: Arc<Mutex<Vec<RTCIceCandidateInit>>>,
 }
 
 #[tokio::main]
@@ -66,7 +67,11 @@ async fn main() {
         })
     }));
 
-    let state = AppState { peer_connection };
+    let queued_candidates = Arc::new(Mutex::new(Vec::new()));
+    let state = AppState {
+        peer_connection,
+        queued_candidates,
+    };
 
     let app = Router::new()
         .route("/offer", post(offer_handler))
@@ -110,9 +115,21 @@ async fn candidate_handler(State(state): State<AppState>, body: String) -> impl 
         ..Default::default()
     };
 
-    state
-        .peer_connection
-        .add_ice_candidate(candidate)
-        .await
-        .unwrap();
+    if state.peer_connection.remote_description().await.is_some() {
+        for candidate in state.queued_candidates.lock().await.drain(..) {
+            state
+                .peer_connection
+                .add_ice_candidate(candidate)
+                .await
+                .unwrap();
+        }
+
+        state
+            .peer_connection
+            .add_ice_candidate(candidate)
+            .await
+            .unwrap();
+    } else {
+        state.queued_candidates.lock().await.push(candidate);
+    }
 }
