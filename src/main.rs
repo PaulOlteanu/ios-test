@@ -10,7 +10,7 @@ use axum::{debug_handler, Json, Router};
 use serde::{Deserialize, Serialize};
 use str0m::change::SdpOffer;
 use str0m::net::{Protocol, Receive, Transmit};
-use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
+use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcConfig};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, UdpSocket};
 use tokio::sync::{mpsc, Mutex};
@@ -66,7 +66,7 @@ async fn main() {
         // while let next =
     });
 
-    let mut rtc = Rtc::new();
+    let mut rtc = RtcConfig::new().set_ice_lite(true).build();
 
     let addr = SocketAddr::from(([129, 146, 216, 83], 8080));
     let candidate = Candidate::host(addr, "tcp").unwrap();
