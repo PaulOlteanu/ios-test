@@ -51,6 +51,7 @@ async fn main() {
 
     let mut settings = SettingEngine::default();
     settings.set_network_types(vec![NetworkType::Tcp4]);
+    settings.set_lite(true);
     let d = Duration::from_secs(30);
     settings.set_ice_timeouts(Some(d), Some(d), Some(d));
 
