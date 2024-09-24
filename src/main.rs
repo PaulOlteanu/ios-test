@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::extract::State;
 use axum::response::IntoResponse;
@@ -51,6 +51,8 @@ async fn main() {
 
     let mut settings = SettingEngine::default();
     settings.set_network_types(vec![NetworkType::Tcp4]);
+    let d = Duration::from_secs(30);
+    settings.set_ice_timeouts(Some(d), Some(d), Some(d));
 
     let api = APIBuilder::new()
         .with_media_engine(m)
@@ -149,6 +151,7 @@ async fn offer_handler(State(state): State<AppState>, body: String) -> impl Into
     let _ = gather_complete.recv().await;
 
     let local_desc = state.peer_connection.local_description().await.unwrap();
+    println!("sending answer {}", local_desc.sdp);
     local_desc.sdp
 }
 
