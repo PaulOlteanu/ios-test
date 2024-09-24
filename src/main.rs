@@ -213,6 +213,8 @@ async fn offer_handler(State(state): State<WrappedState>, body: String) -> impl 
     let offer = SdpOffer::from_sdp_string(&body).unwrap();
     let answer = state.rtc.sdp_api().accept_offer(offer).unwrap();
 
+    state.ready_send.send(()).unwrap();
+
     dbg!(answer.to_sdp_string())
 }
 
