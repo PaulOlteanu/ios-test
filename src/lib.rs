@@ -101,10 +101,10 @@ pub fn run(
         let bytes = vec![1; buffer_size];
         send.write_all(&bytes).await.unwrap();
         send.finish().unwrap();
-        send.stopped().await.unwrap();
+        let _ = send.stopped().await;
 
         println!("speed test done");
 
-        endpoint.close(0u8.into(), b"bye").await.unwrap();
+        let _ = endpoint.close(0u8.into(), b"bye").await;
     });
 }
