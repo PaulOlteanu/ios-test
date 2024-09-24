@@ -1,3 +1,4 @@
+use std::io::Cursor;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -8,8 +9,9 @@ use axum::routing::{get, post};
 use axum::{debug_handler, Json, Router};
 use serde::{Deserialize, Serialize};
 use str0m::change::SdpOffer;
-use str0m::net::{Protocol, Receive};
+use str0m::net::{Protocol, Receive, Transmit};
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpSocket, UdpSocket};
 use tokio::sync::{mpsc, Mutex};
 
@@ -31,13 +33,43 @@ type WrappedState = Arc<Mutex<AppState>>;
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let socket = UdpSocket::bind("0.0.0.0:8080").await.unwrap();
+    // let socket = UdpSocket::bind("0.0.0.0:8080").await.unwrap();
+    let socket = TcpSocket::new_v4().unwrap();
+    socket.bind("0.0.0.0:8080".parse().unwrap()).unwrap();
+    let listener = socket.listen(1024).unwrap();
+
+    let (in_send, mut in_recv) = mpsc::unbounded_channel::<Recv>();
+    let (out_send, mut out_recv) = mpsc::unbounded_channel::<Transmit>();
+
+    tokio::spawn(async move {
+        let (mut connection, addr) = listener.accept().await.unwrap();
+        let (mut recv, mut send) = connection.split();
+        loop {
+            let mut buf = vec![0; 33000];
+            tokio::select! {
+                Ok(n) = recv.read(&mut buf) => {
+                    buf.truncate(n);
+                    let recv = Recv {
+                        source: addr,
+                        contents: buf,
+                    };
+
+                    in_send.send(recv).unwrap();
+                }
+
+                Some(t) = out_recv.recv() => {
+                    let mut buf = Cursor::new(Vec::from(t.contents));
+                    send.write_all_buf(&mut buf).await.unwrap();
+                }
+            }
+        }
+        // while let next =
+    });
 
     let mut rtc = Rtc::new();
 
-    // let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
     let addr = SocketAddr::from(([129, 146, 216, 83], 8080));
-    let candidate = Candidate::host(addr, "udp").unwrap();
+    let candidate = Candidate::host(addr, "tcp").unwrap();
 
     rtc.add_local_candidate(candidate.clone());
 
@@ -54,10 +86,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/offer", post(offer_handler))
-        .route(
-            "/candidate",
-            get(get_candidate_handler).post(candidate_handler),
-        )
+        .route("/candidate", post(candidate_handler))
         .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
@@ -83,7 +112,7 @@ async fn main() {
                 // a UDP socket. The destination IP comes from the ICE
                 // agent. It might change during the session.
                 Output::Transmit(v) => {
-                    socket.send_to(&v.contents, v.destination).await.unwrap();
+                    out_send.send(v).unwrap();
                     continue;
                 }
 
@@ -139,24 +168,22 @@ async fn main() {
             }
         };
 
-        let mut buf = vec![0; 4096];
-
-        let input = tokio::select! {
-            input = socket.recv_from(&mut buf) => {
-                let (n, source) = input.unwrap();
-                buf.truncate(n);
-
+        tokio::select! {
+            Some(recv) = in_recv.recv() => {
                 let destination = addr;
 
-                Input::Receive(
+                let input = Input::Receive(
                     Instant::now(),
                     Receive {
-                        proto: Protocol::Udp,
-                        source,
+                        proto: Protocol::Tcp,
+                        source: recv.source,
                         destination,
-                        contents: buf.as_slice().try_into().unwrap(),
+                        contents: recv.contents.as_slice().try_into().unwrap(),
                     }
-                )
+                );
+
+                let mut state = state.lock().await;
+                state.rtc.handle_input(input).unwrap();
             }
 
             _ = new_candidate_recv.recv() => {
@@ -164,14 +191,18 @@ async fn main() {
             }
 
             _ = tokio::time::sleep_until(timeout.into()) => {
-                Input::Timeout(Instant::now())
+                let input = Input::Timeout(Instant::now());
+
+                let mut state = state.lock().await;
+                state.rtc.handle_input(input).unwrap();
             }
         };
-
-        let mut state = state.lock().await;
-        // Input is either a Timeout or Receive of data. Both drive the state forward.
-        state.rtc.handle_input(input).unwrap();
     }
+}
+
+struct Recv {
+    source: SocketAddr,
+    contents: Vec<u8>,
 }
 
 #[debug_handler]
@@ -182,17 +213,7 @@ async fn offer_handler(State(state): State<WrappedState>, body: String) -> impl 
     let offer = SdpOffer::from_sdp_string(&body).unwrap();
     let answer = state.rtc.sdp_api().accept_offer(offer).unwrap();
 
-    answer.to_sdp_string()
-}
-
-#[debug_handler]
-async fn get_candidate_handler(State(state): State<WrappedState>) -> impl IntoResponse {
-    println!("request to get candidate");
-    let state = state.lock().await;
-
-    state.ready_send.send(()).unwrap();
-
-    state.candidate.to_sdp_string()
+    dbg!(answer.to_sdp_string())
 }
 
 #[debug_handler]
