@@ -8,30 +8,12 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
 futures = "0.3.30"
+iroh-net = "0.25"
 rand = "0.8"
-libp2p = { version = "0.54.1", features = [
-  "noise",
-  "ping",
-  "tcp",
-  "tokio",
-  "yamux",
-  "rsa",
-  "quic",
-  "relay",
-  "dns",
-  "dcutr",
-  "identify",
-  "macros",
-  "autonat",
-] }
-libp2p-stream = "0.2.0-alpha"
 tokio = { version = "1.40.0", features = ["full"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 uniffi = { version = "0.28.1", features = ["build", "cli"] }
-
-[patch.crates-io]
-if-watch = { git = "https://github.com/PaulOlteanu/if-watch.git", rev = "e33de89" }
 
 [build-dependencies]
 uniffi = { version = "0.28", features = ["build", "cli"] }

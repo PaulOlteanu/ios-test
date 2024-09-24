@@ -1,206 +1,110 @@
 uniffi::setup_scaffolding!();
 
-use std::io;
-use std::time::Duration;
+use std::{
+    net::SocketAddr,
+    time::{Duration, Instant},
+};
 
 use futures::{AsyncReadExt, AsyncWriteExt, StreamExt};
-use libp2p::autonat;
-use libp2p::dcutr;
-use libp2p::dns::ResolverConfig;
-use libp2p::dns::ResolverOpts;
-use libp2p::identify;
-use libp2p::multiaddr::Protocol;
-use libp2p::noise;
-use libp2p::ping;
-use libp2p::relay;
-use libp2p::swarm::NetworkBehaviour;
-use libp2p::swarm::SwarmEvent;
-use libp2p::yamux;
-use libp2p::{Multiaddr, PeerId, Stream, StreamProtocol};
 
-use libp2p_stream as stream;
-use rand::RngCore;
+use iroh_net::{key::SecretKey, relay::RelayMode, Endpoint, NodeAddr, NodeId};
+use tracing::info;
 
-const ECHO_PROTOCOL: StreamProtocol = StreamProtocol::new("/echo");
-
-#[derive(NetworkBehaviour)]
-struct Behaviour {
-    relay_client: relay::client::Behaviour,
-    identify: identify::Behaviour,
-    dcutr: dcutr::Behaviour,
-    stream: libp2p_stream::Behaviour,
-    ping: ping::Behaviour,
-}
+// An example ALPN that we are using to communicate over the `Endpoint`
+const EXAMPLE_ALPN: &[u8] = b"n0/iroh/examples/magic/0";
 
 #[uniffi::export]
-pub fn run(url: String, relay_address: String, bandwidth: f64, duration: u64, buffer_size: u64) {
+pub fn run(
+    node_id: String,
+    // relay_url: String,
+    direct_addresses: String,
+    bandwidth: f64,
+    duration: f64,
+    buffer_size: u64,
+) {
+    let duration = Duration::try_from_secs_f64(duration).unwrap();
+    let buffer_size = buffer_size as usize;
+
+    let node_id: NodeId = node_id.parse().unwrap();
+    let direct_addresses = direct_addresses
+        .split(',')
+        .map(|x| x.trim().parse().unwrap())
+        .collect::<Vec<SocketAddr>>();
+
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap();
 
+    let secret_key = SecretKey::generate();
+    println!("secret key: {secret_key}");
+
     rt.block_on(async move {
-        tracing_subscriber::fmt().init();
+        tracing_subscriber::fmt::init();
 
-        let mut swarm = libp2p::SwarmBuilder::with_new_identity()
-            .with_tokio()
-            .with_tcp(
-                libp2p::tcp::Config::default().nodelay(true),
-                libp2p::noise::Config::new,
-                libp2p::yamux::Config::default,
-            )
-            .expect("with_tcp")
-            .with_dns_config(ResolverConfig::cloudflare(), ResolverOpts::default())
-            .with_relay_client(noise::Config::new, yamux::Config::default)
-            .expect("with_relay_client")
-            .with_behaviour(|keypair, relay_behaviour| Behaviour {
-                relay_client: relay_behaviour,
-                identify: identify::Behaviour::new(identify::Config::new(
-                    "/TODO/0.0.1".to_string(),
-                    keypair.public(),
-                )),
-                dcutr: dcutr::Behaviour::new(keypair.public().to_peer_id()),
-                stream: stream::Behaviour::new(),
-                ping: ping::Behaviour::new(ping::Config::new()),
-            })
-            .expect("with_behaviour")
-            .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(30)))
-            .build();
-
-        swarm
-            .listen_on("/ip4/0.0.0.0/tcp/0".parse().unwrap())
-            .expect("listen_on");
-
-        // Wait to listen on all interfaces.
-        let sleep = tokio::time::sleep(Duration::from_secs(1));
-        tokio::pin!(sleep);
-
-        // TODO: Could enumerate interfaces and then ensure we get a listener for all of them
-        loop {
-            tokio::select! {
-                event = swarm.next() => {
-                    match event.expect("event") {
-                        SwarmEvent::NewListenAddr { address, .. } => {
-                            tracing::info!(%address, "Listening on address");
-                        }
-                        event => panic!("{event:?}"),
-                    }
-                }
-                _ = &mut sleep => {
-                    // Likely listening on all interfaces now, thus continuing by breaking the loop.
-                    break;
-                }
-            }
-        }
-
-        let relay_address: Multiaddr = relay_address.parse().expect("parse");
-        swarm.dial(relay_address.clone()).expect("dial");
-
-        let mut learned_observed_addr = false;
-        let mut told_relay_observed_addr = false;
-
-        loop {
-            match swarm.next().await.unwrap() {
-                SwarmEvent::NewListenAddr { address, .. } => {
-                    tracing::info!(%address, "Listening on address");
-                }
-
-                SwarmEvent::Dialing { .. } => {}
-                SwarmEvent::ConnectionEstablished { .. } => {}
-                SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Sent {
-                    ..
-                })) => {
-                    tracing::info!("Told relay its public address");
-                    told_relay_observed_addr = true;
-                }
-                SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Received {
-                    info: identify::Info { observed_addr, .. },
-                    ..
-                })) => {
-                    tracing::info!(address=%observed_addr, "Relay told us our observed address");
-                    learned_observed_addr = true;
-                }
-                event => panic!("{event:?}"),
-            }
-
-            if learned_observed_addr && told_relay_observed_addr {
-                break;
-            }
-        }
-
-        let remote: Multiaddr = url.parse().unwrap();
-        let Protocol::P2p(peer_id) = remote.iter().last().unwrap() else {
-            panic!("no peerid in addr");
-        };
-
-        swarm
-            .dial(
-                relay_address
-                    .with(Protocol::P2pCircuit)
-                    .with(Protocol::P2p(peer_id)),
-            )
+        // Build a `Endpoint`, which uses PublicKeys as node identifiers, uses QUIC for directly connecting to other nodes, and uses the relay protocol and relay servers to holepunch direct connections between nodes when there are NATs or firewalls preventing direct connections. If no direct connection can be made, packets are relayed over the relay servers.
+        let endpoint = Endpoint::builder()
+            // The secret key is used to authenticate with other nodes. The PublicKey portion of this secret key is how we identify nodes, often referred to as the `node_id` in our codebase.
+            .secret_key(secret_key)
+            // set the ALPN protocols this endpoint will accept on incoming connections
+            .alpns(vec![EXAMPLE_ALPN.to_vec()])
+            // `RelayMode::Default` means that we will use the default relay servers to holepunch and relay.
+            // Use `RelayMode::Custom` to pass in a `RelayMap` with custom relay urls.
+            // Use `RelayMode::Disable` to disable holepunching and relaying over HTTPS
+            // If you want to experiment with relaying using your own relay server, you must pass in the same custom relay url to both the `listen` code AND the `connect` code
+            .relay_mode(RelayMode::Default)
+            // you can choose a port to bind to, but passing in `0` will bind the socket to a random available port
+            .bind()
+            .await
             .unwrap();
 
-        let control = swarm.behaviour().stream.new_control();
-
-        tokio::spawn(async move { connection_handler(peer_id, control).await });
-
-        while let Some(event) = swarm.next().await {
-            match event {
-                libp2p::swarm::SwarmEvent::NewListenAddr { address, .. } => {
-                    let listen_address = address.with_p2p(*swarm.local_peer_id()).unwrap();
-                    tracing::info!(%listen_address, "new listen address");
-                }
-
-                event => tracing::info!(?event, "got event"),
-            }
+        let me = endpoint.node_id();
+        println!("node id: {me}");
+        println!("node listening addresses:");
+        for local_endpoint in endpoint.direct_addresses().next().await.unwrap() {
+            println!("\t{}", local_endpoint.addr)
         }
+
+        let relay_url = endpoint.home_relay().unwrap();
+        // .expect("should be connected to a relay server, try calling `endpoint.local_endpoints()` or `endpoint.connect()` first, to ensure the endpoint has actually attempted a connection before checking for the connected relay server");
+
+        println!("node relay server url: {relay_url}\n");
+        // Build a `NodeAddr` from the node_id, relay url, and UDP addresses.
+        let addr = NodeAddr::from_parts(node_id, Some(relay_url), direct_addresses);
+
+        // Attempt to connect, over the given ALPN.
+        // Returns a Quinn connection.
+        let conn = endpoint.connect(addr, EXAMPLE_ALPN).await.unwrap();
+        info!("connected");
+
+        // Use the Quinn API to send and recv content.
+        let (mut send, mut recv) = conn.open_bi().await.unwrap();
+
+        let start = Instant::now();
+
+        let bytes_per_sec = (bandwidth / 8.0) * (1024.0 * 1024.0);
+        let sends_per_sec = bytes_per_sec / buffer_size as f64;
+
+        let mut interval =
+            tokio::time::interval(Duration::try_from_secs_f64(1.0 / sends_per_sec).unwrap());
+
+        println!("starting speed test");
+
+        while start.elapsed() < duration {
+            interval.tick().await;
+
+            let bytes = vec![0; buffer_size];
+
+            send.write_all(&bytes).await.unwrap();
+        }
+
+        let bytes = vec![1; buffer_size];
+        send.write_all(&bytes).await.unwrap();
+        send.finish().unwrap();
+        send.stopped().await.unwrap();
+
+        println!("speed test done");
+
+        endpoint.close(0u8.into(), b"bye").await.unwrap();
     });
-}
-
-async fn connection_handler(peer: PeerId, mut control: stream::Control) {
-    loop {
-        tokio::time::sleep(Duration::from_secs(1)).await; // Wait a second between echos.
-
-        let stream = match control.open_stream(peer, ECHO_PROTOCOL).await {
-            Ok(stream) => stream,
-            Err(error @ stream::OpenStreamError::UnsupportedProtocol(_)) => {
-                tracing::info!(%peer, %error, "failed to create stream");
-                return;
-            }
-            Err(error) => {
-                // Other errors may be temporary.
-                // In production, something like an exponential backoff / circuit-breaker may be more appropriate.
-                tracing::debug!(%peer, %error, "failed to create stream");
-                continue;
-            }
-        };
-
-        if let Err(e) = send(stream).await {
-            tracing::warn!(%peer, "Echo protocol failed: {e}");
-            continue;
-        }
-
-        tracing::info!(%peer, "Echo complete!")
-    }
-}
-
-async fn send(mut stream: Stream) -> io::Result<()> {
-    let num_bytes = 1024;
-
-    let mut bytes = vec![0; num_bytes];
-    rand::thread_rng().fill_bytes(&mut bytes);
-
-    stream.write_all(&bytes).await?;
-
-    let mut buf = vec![0; num_bytes];
-    stream.read_exact(&mut buf).await?;
-
-    if bytes != buf {
-        return Err(io::Error::new(io::ErrorKind::Other, "incorrect echo"));
-    }
-
-    stream.close().await?;
-
-    Ok(())
 }

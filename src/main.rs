@@ -1,177 +1,155 @@
-use std::io;
-use std::time::Duration;
-use std::time::Instant;
+//! The smallest example showing how to use iroh-net and [`iroh_net::Endpoint`] to connect two devices.
+//!
+//! This example uses the default relay servers to attempt to holepunch, and will use that relay server to relay packets if the two devices cannot establish a direct UDP connection.
+//! run this example from the project root:
+//!     $ cargo run --example listen
+use std::time::{Duration, Instant};
 
-use futures::AsyncWriteExt;
-use futures::{AsyncReadExt, StreamExt};
-use libp2p::autonat;
-use libp2p::dcutr;
-use libp2p::dns::ResolverConfig;
-use libp2p::dns::ResolverOpts;
-use libp2p::identify;
-use libp2p::identity::Keypair;
-use libp2p::multiaddr::Protocol;
-use libp2p::noise;
-use libp2p::ping;
-use libp2p::relay;
-use libp2p::swarm::NetworkBehaviour;
-use libp2p::swarm::SwarmEvent;
-use libp2p::yamux;
-use libp2p::Multiaddr;
-use libp2p::{Stream, StreamProtocol};
-use libp2p_stream as stream;
-use rand::rngs::OsRng;
-use tracing::info;
+use futures::StreamExt;
+use iroh_net::endpoint::ConnectionError;
+use iroh_net::key::SecretKey;
+use iroh_net::relay::RelayMode;
+use iroh_net::Endpoint;
+use tracing::{debug, info, warn};
 
-const ECHO_PROTOCOL: StreamProtocol = StreamProtocol::new("/echo");
-
-#[derive(NetworkBehaviour)]
-struct Behaviour {
-    relay_client: relay::client::Behaviour,
-    identify: identify::Behaviour,
-    dcutr: dcutr::Behaviour,
-    stream: libp2p_stream::Behaviour,
-    ping: ping::Behaviour,
-}
+// An example ALPN that we are using to communicate over the `Endpoint`
+const EXAMPLE_ALPN: &[u8] = b"n0/iroh/examples/magic/0";
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt().init();
+    tracing_subscriber::fmt::init();
+    let secret_key = SecretKey::generate();
+    println!("secret key: {secret_key}");
 
-    let mut bytes = std::fs::read("private.pk8").unwrap();
-    let keypair = Keypair::rsa_from_pkcs8(&mut bytes).unwrap();
-
-    let mut swarm = libp2p::SwarmBuilder::with_existing_identity(keypair)
-        .with_tokio()
-        .with_tcp(
-            libp2p::tcp::Config::default().nodelay(true),
-            libp2p::noise::Config::new,
-            libp2p::yamux::Config::default,
-        )
-        .unwrap()
-        .with_dns_config(ResolverConfig::cloudflare(), ResolverOpts::default())
-        .with_relay_client(noise::Config::new, yamux::Config::default)
-        .expect("with_relay_client")
-        .with_behaviour(|keypair, relay_behaviour| Behaviour {
-            relay_client: relay_behaviour,
-            identify: identify::Behaviour::new(identify::Config::new(
-                "/TODO/0.0.1".to_string(),
-                keypair.public(),
-            )),
-            dcutr: dcutr::Behaviour::new(keypair.public().to_peer_id()),
-            stream: stream::Behaviour::new(),
-            ping: ping::Behaviour::new(ping::Config::new()),
-        })
-        .expect("with_behaviour")
-        .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(20)))
-        .build();
-
-    swarm
-        .listen_on("/ip4/0.0.0.0/tcp/0".parse().unwrap())
+    // Build a `Endpoint`, which uses PublicKeys as node identifiers, uses QUIC for directly connecting to other nodes, and uses the relay protocol and relay servers to holepunch direct connections between nodes when there are NATs or firewalls preventing direct connections. If no direct connection can be made, packets are relayed over the relay servers.
+    let endpoint = Endpoint::builder()
+        // The secret key is used to authenticate with other nodes. The PublicKey portion of this secret key is how we identify nodes, often referred to as the `node_id` in our codebase.
+        .secret_key(secret_key)
+        // set the ALPN protocols this endpoint will accept on incoming connections
+        .alpns(vec![EXAMPLE_ALPN.to_vec()])
+        // `RelayMode::Default` means that we will use the default relay servers to holepunch and relay.
+        // Use `RelayMode::Custom` to pass in a `RelayMap` with custom relay urls.
+        // Use `RelayMode::Disable` to disable holepunching and relaying over HTTPS
+        // If you want to experiment with relaying using your own relay server, you must pass in the same custom relay url to both the `listen` code AND the `connect` code
+        .relay_mode(RelayMode::Default)
+        // you can choose a port to bind to, but passing in `0` will bind the socket to a random available port
+        .bind()
+        .await
         .unwrap();
 
-    // Wait to listen on all interfaces.
-    let sleep = tokio::time::sleep(Duration::from_secs(1));
-    tokio::pin!(sleep);
+    let me = endpoint.node_id();
+    println!("node id: {me}");
+    println!("node listening addresses:");
 
-    // TODO: Could enumerate interfaces and then ensure we get a listener for all of them
-    loop {
-        tokio::select! {
-            event = swarm.next() => {
-                match event.expect("event") {
-                    SwarmEvent::NewListenAddr { address, .. } => {
-                        let listen_address = address.with_p2p(*swarm.local_peer_id()).unwrap();
-                        tracing::info!(%listen_address, "Listening on address");
+    let local_addrs = endpoint
+        .direct_addresses()
+        .next()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|endpoint| {
+            let addr = endpoint.addr.to_string();
+            println!("\t{addr}");
+            addr
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+
+    println!("local addrs: {}", local_addrs);
+
+    let relay_url = endpoint.home_relay().unwrap();
+    println!("node relay server url: {relay_url}");
+    println!("\nin a separate terminal run:");
+
+    println!(
+        "\tcargo run --example connect -- --node-id {me} --addrs \"{local_addrs}\" --relay-url {relay_url}\n"
+    );
+    // accept incoming connections, returns a normal QUIC connection
+    while let Some(incoming) = endpoint.accept().await {
+        let mut connecting = match incoming.accept() {
+            Ok(connecting) => connecting,
+            Err(err) => {
+                warn!("incoming connection failed: {err:#}");
+                // we can carry on in these cases:
+                // this can be caused by retransmitted datagrams
+                continue;
+            }
+        };
+        let alpn = connecting.alpn().await.unwrap();
+        let conn = connecting.await.unwrap();
+        let node_id = iroh_net::endpoint::get_remote_node_id(&conn).unwrap();
+        info!(
+            "new connection from {node_id} with ALPN {} (coming from {})",
+            String::from_utf8_lossy(&alpn),
+            conn.remote_address()
+        );
+
+        // spawn a task to handle reading and writing off of the connection
+        tokio::spawn(async move {
+            // accept a bi-directional QUIC connection
+            // use the `quinn` APIs to send and recv content
+            let (mut send, mut recv) = conn.accept_bi().await.unwrap();
+            debug!("accepted bi stream, waiting for data...");
+
+            let start = Instant::now();
+
+            let mut total = 0;
+            let mut total_messages = 0;
+
+            let mut previous_amount = 0;
+            let mut previous_time = Instant::now();
+
+            let mut buf = [0u8; 16384];
+            loop {
+                match recv.read(&mut buf).await.unwrap() {
+                    None | Some(0) => {
+                        let elapsed = start.elapsed();
+
+                        let throughput =
+                            (((total * 8) / (1024 * 1024)) as f64) / elapsed.as_secs_f64();
+                        println!(
+                            "FINAL: received {} bytes over {:?}. throughput = {} mbps",
+                            total, elapsed, throughput
+                        );
+
+                        break;
                     }
-                    event => panic!("{event:?}"),
+
+                    Some(n) => {
+                        if buf[0] == 1 {
+                            let elapsed = start.elapsed();
+
+                            let throughput =
+                                (((total * 8) / (1024 * 1024)) as f64) / elapsed.as_secs_f64();
+                            println!(
+                                "FINAL: received {} bytes over {:?}. throughput = {} mbps",
+                                total, elapsed, throughput
+                            );
+
+                            break;
+                        }
+
+                        total_messages += 1;
+                        total += n;
+
+                        if total_messages % 100 == 0 {
+                            let elapsed = previous_time.elapsed();
+
+                            let read = total - previous_amount;
+                            let throughput =
+                                ((read * 8) as f64 / (1024 * 1024) as f64) / elapsed.as_secs_f64();
+
+                            println!(
+                                "received {} bytes over {:?}. throughput = {} mbps",
+                                total, elapsed, throughput
+                            );
+
+                            previous_amount = total;
+                            previous_time = Instant::now();
+                        }
+                    }
                 }
             }
-            _ = &mut sleep => {
-                // Likely listening on all interfaces now, thus continuing by breaking the loop.
-                break;
-            }
-        }
-    }
-
-    let relay_address = std::env::args().nth(1).unwrap();
-    let relay_address: Multiaddr = relay_address.parse().expect("parse");
-    swarm.dial(relay_address.clone()).expect("dial");
-
-    let mut learned_observed_addr = false;
-    let mut told_relay_observed_addr = false;
-
-    loop {
-        match swarm.next().await.unwrap() {
-            SwarmEvent::NewListenAddr { address, .. } => {
-                let listen_address = address.with_p2p(*swarm.local_peer_id()).unwrap();
-                tracing::info!(%listen_address, "Listening on address");
-            }
-
-            SwarmEvent::Dialing { .. } => {}
-            SwarmEvent::ConnectionEstablished { .. } => {}
-            SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Sent { .. })) => {
-                tracing::info!("Told relay its public address");
-                told_relay_observed_addr = true;
-            }
-            SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Received {
-                info: identify::Info { observed_addr, .. },
-                ..
-            })) => {
-                tracing::info!(address=%observed_addr, "Relay told us our observed address");
-                learned_observed_addr = true;
-            }
-            event => panic!("{event:?}"),
-        }
-
-        if learned_observed_addr && told_relay_observed_addr {
-            break;
-        }
-    }
-
-    swarm
-        .listen_on(relay_address.with(Protocol::P2pCircuit))
-        .unwrap();
-
-    let mut incoming_streams = swarm
-        .behaviour()
-        .stream
-        .new_control()
-        .accept(ECHO_PROTOCOL)
-        .unwrap();
-
-    tokio::spawn(async move {
-        while let Some((peer_id, stream)) = incoming_streams.next().await {
-            info!(%peer_id, "new stream");
-            tokio::spawn(async move {
-                let _ = recv(stream).await;
-            });
-        }
-    });
-
-    while let Some(event) = swarm.next().await {
-        match event {
-            libp2p::swarm::SwarmEvent::NewListenAddr { address, .. } => {
-                let listen_address = address.with_p2p(*swarm.local_peer_id()).unwrap();
-                tracing::info!(%listen_address, "Listening on address");
-            }
-
-            event => tracing::info!(?event, "got event"),
-        }
-    }
-}
-
-async fn recv(mut stream: Stream) -> io::Result<usize> {
-    let mut total = 0;
-
-    let mut buf = [0u8; 2048];
-
-    loop {
-        let read = stream.read(&mut buf).await?;
-        if read == 0 {
-            return Ok(total);
-        }
-
-        total += read;
-        stream.write_all(&buf[..read]).await?;
+        });
     }
 }
