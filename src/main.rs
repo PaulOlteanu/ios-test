@@ -50,7 +50,7 @@ async fn main() {
     registry = register_default_interceptors(registry, &mut m).unwrap();
 
     let mut settings = SettingEngine::default();
-    settings.set_network_types(vec![NetworkType::Udp4]);
+    settings.set_network_types(vec![NetworkType::Tcp4]);
 
     let api = APIBuilder::new()
         .with_media_engine(m)
