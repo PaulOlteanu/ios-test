@@ -73,6 +73,12 @@ async fn main() {
 
     let peer_connection = Arc::new(api.new_peer_connection(config).await.unwrap());
 
+    peer_connection.on_ice_candidate(Box::new(move |c| {
+        println!("got new local candidate {:?}", c);
+
+        Box::pin(async {})
+    }));
+
     peer_connection.on_data_channel(Box::new(move |d| {
         println!("received data channel");
 
@@ -92,8 +98,6 @@ async fn main() {
 
         Box::pin(async move {
             d.on_message(Box::new(move |msg| {
-                println!("received message");
-
                 if !msg.data.is_empty() && msg.data[0] == 1 {
                     println!("finished");
                     let elapsed = dcs.lock().unwrap().get(&label).unwrap().start.elapsed();
